@@ -1,0 +1,35 @@
+---
+
+- name: Update firewalls
+  hosts: firewalls
+  user: root
+  vars_files:
+    - vars/aliases.yml
+
+  tasks:
+    - name: Create aliases directory
+      file: path=/usr/local/www/aliases state=directory
+
+    - name: Upload PHP script
+      copy: src=files/index.php dest=/usr/local/www/aliases/index.php
+
+    - name: List alias files
+      shell: ls -1 /usr/local/www/aliases/*.inc
+      register: contents
+
+    - name: Remove old files
+      file: name={{ item }} state=absent
+      with_items: contents.stdout_lines
+
+    - name: Upload aliases
+      lineinfile: dest=/usr/local/www/aliases/{{item.0.filename}}.inc line={{item.1}} create=yes
+      with_subelements:
+        - fw_aliases
+        - ips
+
+    - name: Reload url tables
+      command: /etc/rc.update_alias_url_data
+
+    - name: Reload url tables
+      command: /etc/rc.update_urltables
+

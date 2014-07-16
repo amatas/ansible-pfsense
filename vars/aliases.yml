@@ -1,0 +1,11 @@
+---
+
+fw_aliases:
+  - filename: deny_all
+    ips:
+      - 192.168.50.50
+      - 192.154.1.0/24
+      - 192.154.3.0/24
+  - filename: deny_ssh
+    ips:
+      - "!192.154.50.0/24"
