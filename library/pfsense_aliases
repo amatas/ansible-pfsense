@@ -1,0 +1,200 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+DOCUMENTATION = '''
+module: pfsense_aliases
+short_description: Manages aliases of a pfsense box
+description:
+  - Manages hosts, networks and ports aliases of pFsense.
+version_added: "0.0.1"
+options:
+  name:
+    description:
+      - Name used to identify the alias
+    required: true
+  description:
+    description:
+      - Description of the alias
+    required: false
+  type:
+    description:
+      - Type of the alias, could be one of the following types: hosts, networks, ports, urls, urltables.
+    required: true
+  listofvalues:
+    description:
+      - The list of values of the alias. The list must be a dictionary of key:value for each entry.
+    required: false
+  state:
+    description:
+      - Indicates if the rule must be present or absent. Possible values are: present and absent.
+    default: present
+    required: false
+'''
+
+EXAMPLES = '''
+    - name: Set IP_alias
+      pfsense_aliases:
+        name: IP_alias
+        description: Test alias
+        type: hosts
+        state: present
+        listofvalues:
+            18.18.18.2: "fw bar1"
+            18.18.18.6: "fw bar2"
+            18.18.18.3: "fw bar3"
+
+    - name: Delete IP_alias
+      pfsense_aliases:
+        name: IP_alias
+        state: absent
+'''
+
+from ansible.module_utils.basic import *
+import re
+import datetime
+
+
+def _search_alias(module, name):
+    pfsh_command = "/usr/local/sbin/pfSsh.php"
+    script = """
+parse_config(true);
+foreach($config[aliases][alias] as $key => $alias){{if($alias['name']=='{name}'){{echo "ALIAS_FOUND ".$key."\\n";break;}}}}
+exec
+exit
+"""
+    rc, out, err = module.run_command([pfsh_command],
+                                      executable=pfsh_command,
+                                      data=script.format(name=name),
+                                      use_unsafe_shell=False)
+
+    if err is None:
+        err = ''
+    if err != '':
+        module.fail_json(msg='Alias search error :' + err + ':' + out)
+
+    try:
+        alias_found = [s for s in out.splitlines() if s.startswith("ALIAS_FOUND")]
+        alias_key = re.search(r"ALIAS_FOUND (\d+)", alias_found[0])
+        return alias_key.group(1)
+    except IndexError:
+        return False
+
+
+def _insert_alias(module, name, description, alias_type, listofvalues):
+    pfsh_command = "/usr/local/sbin/pfSsh.php"
+    script = """
+parse_config(true);
+$config[aliases][alias][{key}]=array('name' => '{name}', 'address' => '{elems}', 'descr' => '{descr}', 'type' => '{atype}', 'detail' => '{detail}');
+write_config();
+exec
+exit
+"""
+    alias_key = _search_alias(module=module, name=name)
+    if not alias_key:
+        alias_key = ''
+
+    rc, out, err = module.run_command([pfsh_command],
+                                      executable=pfsh_command,
+                                      data=script.format(key=alias_key,
+                                                         name=name,
+                                                         elems=' '.join(listofvalues.keys()),  # Python 2.5 Warning
+                                                         descr=description,
+                                                         atype=alias_type,
+                                                         detail='||'.join(listofvalues.values())  # Python 2.5 Warning
+                                                         ),
+                                      use_unsafe_shell=False)
+    return rc, out, err
+
+
+def _remove_alias(module, name):
+    pfsh_command = "/usr/local/sbin/pfSsh.php"
+    script = """
+parse_config(true);
+unset($config[aliases][alias][{key}]);
+write_config();
+exec
+exit
+"""
+    alias_key = _search_alias(module=module, name=name)
+
+    if alias_key:
+
+        rc, out, err = module.run_command([pfsh_command],
+                                          executable=pfsh_command,
+                                          data=script.format(key=alias_key),
+                                          use_unsafe_shell=False)
+        if err is None:
+            err = ''
+        if err != '':
+            module.fail_json(msg='Alias delete error ' + err)
+        else:
+            return rc, out, err
+    else:
+        return 0, "Alias not found", ''
+
+
+def main():
+    module = AnsibleModule(
+        argument_spec=dict(
+            name=dict(required=True, default=None),
+            description=dict(required=False, default=''),
+            type=dict(required=True, choices=['hosts',
+                                              'networks',
+                                              'ports',
+                                              'urls',
+                                              'urltables']),
+            listofvalues=dict(required=False, default=None),
+            state=dict(required=False, default='present', choices=['present', 'absent'])
+        ),
+        supports_check_mode=True,
+        mutually_exclusive=[],
+        required_one_of=[['type']]
+    )
+    startd = datetime.datetime.now()
+
+    params = module.params
+
+    if type(params['name']) is str and type(params['listofvalues']) is dict:
+        if params['state'] == 'present':
+            rc, out, err = _insert_alias(module=module,
+                                         name=params['name'],
+                                         description=params['description'],
+                                         alias_type=params['type'],
+                                         listofvalues=params['listofvalues']
+                                         )
+            endd = datetime.datetime.now()
+            delta = endd - startd
+            module.exit_json(
+                cmd="insert_alias",
+                stdout=out.rstrip("\r\n"),
+                stderr=err.rstrip("\r\n"),
+                rc=rc,
+                start=str(startd),
+                end=str(endd),
+                delta=str(delta),
+                changed=True
+            )
+        elif params['state'] == 'absent':
+            rc, out, err = _remove_alias(module=module, name=params['name'])
+            endd = datetime.datetime.now()
+            delta = endd - startd
+            module.exit_json(
+                cmd="remove_alias",
+                stdout=out.rstrip("\r\n"),
+                stderr=err.rstrip("\r\n"),
+                rc=rc,
+                start=str(startd),
+                end=str(endd),
+                delta=str(delta),
+                changed=True
+            )
+        else:
+            module.fail_json(msg='Incorrect action parameter, possible values are: add, remove')
+    else:
+        module.fail_json(msg='Incorrect params')
+
+# TODO: Check that the environment is a pfsense at module start
+# TODO: validation of listofvalues variable based on the selected type
+
+######################################################################
+main()
