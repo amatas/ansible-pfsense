@@ -77,3 +77,28 @@
           - 0.europe.pool.ntp.org
       tags:
         - dns
+
+    - name: Set IP2_alias
+      pfsense_aliases:
+        name: IP2_alias 8
+        description: Test alias 2
+        type: hosts
+        listofvalues:
+            18.18.18.2: "fw far1"
+            18.18.18.6: "fw far2"
+            18.18.18.3: "fw far3"
+      tags:
+        - alias
+
+    - name: Delete IP2_alias
+      pfsense_aliases:
+        name: IP2_alias 8
+        action: remove
+        description: Test alias 2
+        type: hosts
+        listofvalues:
+            18.18.18.2: "fw far1"
+            18.18.18.6: "fw far2"
+            18.18.18.3: "fw far3"
+      tags:
+        - alias
