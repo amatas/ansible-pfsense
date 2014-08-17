@@ -15,6 +15,7 @@
 
     - name: List alias files
       shell: ls -1 /usr/local/www/aliases/*.inc
+      ignore_errors: yes
       register: contents
 
     - name: Remove old files
