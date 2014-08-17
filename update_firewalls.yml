@@ -34,3 +34,46 @@
     - name: Reload url tables
       command: /etc/rc.update_urltables
 
+#    - name: Set DNS
+#      xml:
+#        file: /cf/conf/config.xml
+#        xpath: /pfsense/system
+#        set_children:
+#          - dnsserver: "10.168.1.1"
+    - name: Set DNS servers
+      pfsense_generic:
+        option: dns
+        value:
+          - 10.168.1.1
+      tags:
+        - dns
+
+    - name: Set hostname
+      pfsense_generic:
+        option: hostname
+        value: firewall1
+      tags:
+        - dns
+
+    - name: Set domain
+      pfsense_generic:
+        option: domain
+        value: do.main
+      tags:
+        - dns
+
+    - name: Set timezone
+      pfsense_generic:
+        option: timezone
+        value: CET
+      tags:
+        - dns
+
+    - name: Set NTP servers
+      pfsense_generic:
+        option: ntptimeserver
+        value:
+          - 1.europe.pool.ntp.org
+          - 0.europe.pool.ntp.org
+      tags:
+        - dns
