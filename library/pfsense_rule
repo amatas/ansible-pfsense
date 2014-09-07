@@ -13,6 +13,8 @@ options:
       - Name used to identify the rule
     required: true
 
+https://github.com/pfsense/pfsense/blob/master/usr/local/www/firewall_rules.php
+
 '''
 
 EXAMPLES = '''
@@ -27,12 +29,160 @@ EXAMPLES = '''
 '''
 
 from ansible.module_utils.basic import *
+from jinja2 import Template
 import datetime
 
 
-def _add_rule(action, disabled, interface, tcpipversion, protocol, source,
-              sourceport, destination, destinationport, log, description):
-    script='''
+def _search_rule(module, key, value):
+    pfsh_command = "/usr/local/sbin/pfSsh.php"
+    scripttemplate = '''
+parse_config(true);
+foreach ($config[filter][rule] as $k=>$subarray){
+if (isset($subarray['{{key}}']) && $subarray['{{key}}'] == '{{value}}') print("RULE_FOUND ".$k."\\n");
+}
+exec
+exit
+'''
+    template = Template(scripttemplate)
+    script = template.render(key=key, value=value)
+
+    rc, out, err = module.run_command([pfsh_command],
+                                      executable=pfsh_command,
+                                      data=script,
+                                      use_unsafe_shell=False)
+
+    if err is None:
+        err = ''
+    if err != '':
+        module.fail_json(msg='Rule search error :' + err + ':' + out)
+
+    try:
+        rule_found = [s for s in out.splitlines() if s.startswith("RULE_FOUND")]
+        rule_key = re.search(r"RULE_FOUND (\d+)", rule_found[0])
+        return rule_key.group(1)
+    except IndexError:
+        return ''
+
+
+def _add_rule(module, ruleid, action, disabled, interface, ipprotocol, protocol, source, sourcetype, sourcenot,
+              sourceport, destination, destinationtype, destinationnot, destinationport, log, description):
+    pfsh_command = "/usr/local/sbin/pfSsh.php"
+    scripttemplate = '''
+require_once("config.inc");
+require_once("functions.inc");
+require_once("filter.inc");
+require_once("shaper.inc");
+require_once("ipsec.inc");
+require_once("vpn.inc");
+
+/* invalidate interface cache */
+get_interface_arr(true);
+
+$config[filter][rule][{id}] = Array(
+'id' => {{ruleid}},
+'type'=> '{{type}}',
+'interface' => '{{interface}}',
+'ipprotocol' => '{{ipprotocol}}',
+'tag' => '',
+'tagged' => '',
+'max' => '',
+'max-src-nodes' => '',
+'max-src-conn' => '',
+'max-src-states' => '',
+'statetimeout' => '',
+'statetype' => 'keep state',
+'os' => '',
+'protocol' => '{{protocol}}',
+'source' => Array
+  (
+{% if sourcetype == 'any' %}
+    'any' => '',
+{% elif sourcetype == 'network' %}
+    'network' => '{{source}}',
+{% elif sourcetype == 'address' %}
+    'address' => '{{source}}',
+{% endif %}
+{% if sourcenot %}
+    'not' => '',
+{% endif %}
+{% if sourceport %}
+    'port' => '{{sourceport}}',
+{% endif %}
+  ),
+'destination' => Array
+  (
+{% if destinationtype == 'any' %}
+    'any' => '',
+{% elif destinationtype == 'network' %}
+    'network' => '{{destination}}',
+{% elif destinationtype == 'address' %}
+    'address' => '{{destination}}',
+{% endif %}
+{% if destinationnot %}
+    'not' => '',
+{% endif %}
+{% if destinationport %}
+    'port' => '{{destinationport}}',
+{% endif %}
+  ),
+{% if disabled %}
+'disabled' => '',
+{% endif %}
+{% if log %}
+'log' => '',
+{% endif %}
+'descr' => '{{description}}',
+'updated' => Array
+  (
+    'time' => '{{updatedtime}}',
+    'username' => '{{ansibleuser}}',
+  ),
+'created' => Array
+  (
+    'time' => '{{createdtime}}',
+    'username' => '{{ansibleuser}}',
+  )
+);
+unlink_if_exists("/tmp/config.cache");
+write_config();
+unlink_if_exists("/tmp/config.cache");
+filter_configure();
+exec
+exit
+'''
+
+    arrayid = _search_rule(module, key='id', value=ruleid)
+
+    template = Template(scripttemplate)
+    script = template.render(id=arrayid,
+                             ruleid=ruleid,
+                             disabled=disabled,
+                             log=log,
+                             type=action,
+                             interface=interface,
+                             ipprotocol=ipprotocol,
+                             protocol=protocol,
+                             source=source,
+                             sourcetype=sourcetype,
+                             sourcenot=sourcenot,
+                             sourceport=sourceport,
+                             destination=destination,
+                             destinationtype=destinationtype,
+                             destinationnot=destinationnot,
+                             destinationport=destinationport,
+                             description=description,
+                             updatedtime=1409397535,
+                             ansibleuser='admin@192.168.51.10')
+    rc, out, err = module.run_command([pfsh_command],
+                                      executable=pfsh_command,
+                                      data=script,
+                                      use_unsafe_shell=False)
+    return rc, out, err
+
+
+def _remove_rule(module, ruleid):
+    pfsh_command = "/usr/local/sbin/pfSsh.php"
+    scripttemplate = '''
 require_once("config.inc");
 require_once("functions.inc");
 require_once("filter.inc");
@@ -48,24 +198,31 @@ $retval = filter_configure();
 
 clear_subsystem_dirty('filter');
 
+unset $config[filter][rule][{id}];
+
 pfSense_handle_custom_code("/usr/local/pkg/firewall_rules/apply");
-
-echo "The settings have been applied. The firewall rules are now reloading in the background.<br/>";
-
 filter_configure_sync();
+exec
+exit
 '''
-    return 0, '', ''
-
-
-def _remove_rule():
-    return 0, '', ''
+    arrayid = _search_rule(module, key='id', value=ruleid)
+    if arrayid == '':
+        return '', 0, ''
+    template = Template(scripttemplate)
+    script = template.render(id=arrayid)
+    rc, out, err = module.run_command([pfsh_command],
+                                      executable=pfsh_command,
+                                      data=script,
+                                      use_unsafe_shell=False)
+    return rc, out, err
 
 
 def main():
     module = AnsibleModule(
         argument_spec=dict(
+            ruleid=dict(required=True),
             action=dict(required=False, default='pass', choices=['pass', 'block', 'reject']),
-            disabled=dict(required=False, default='pass', choices=['true', 'false']),
+            disabled=dict(required=False, default='false', choices=['true', 'false']),
             interface=dict(required=True),
             tcpipversion=dict(required=False, default='ipv4', choices=['ipv4', 'ipv6', 'ipv4+ipv6']),
             protocol=dict(required=False, default='tcp', choices=['tcp',
@@ -82,8 +239,16 @@ def main():
                                                                   'carp',
                                                                   'pfsync']),
             source=dict(required=False, default='any'),
+            sourcenot=dict(required=False, default='any'),
+            sourcetype=dict(required=False, default='any', choices=['any',
+                                                                    'network',
+                                                                    'address']),
             sourceport=dict(required=False, default='any'),
             destination=dict(required=False, default='any'),
+            destinationnot=dict(required=False, default='any'),
+            destinationtype=dict(required=False, default='any', choices=['any',
+                                                                         'network',
+                                                                         'address']),
             destinationport=dict(required=False, default='any'),
             log=dict(required=False, default='false'),
             description=dict(required=False, default=''),
@@ -91,28 +256,34 @@ def main():
         ),
         supports_check_mode=True,
         mutually_exclusive=[],
-        required_one_of=[['type']]
+        required_one_of=[['ruleid']]
     )
     startd = datetime.datetime.now()
 
     params = module.params
 
     if params['state'] == 'present':
-        rc, out, err = _add_rule(action=params['action'],
+        rc, out, err = _add_rule(module,
+                                 ruleid=params['ruleid'],
+                                 action=params['action'],
                                  disabled=params['disabled'],
                                  interface=params['interface'],
-                                 tcpipversion=params['tcpipversion'],
+                                 ipprotocol=params['tcpipversion'],
                                  protocol=params['protocol'],
                                  source=params['source'],
+                                 sourcetype=params['source'],
+                                 sourcenot=params['sourcenot'],
                                  sourceport=params['sourceport'],
                                  destination=params['destination'],
+                                 destinationtype=params['destination'],
+                                 destinationnot=params['destinationnot'],
                                  destinationport=params['destinationport'],
                                  log=params['log'],
                                  description=params['description'])
         endd = datetime.datetime.now()
         delta = endd - startd
         module.exit_json(
-            cmd="remove_alias",
+            cmd="add_rule",
             stdout=out.rstrip("\r\n"),
             stderr=err.rstrip("\r\n"),
             rc=rc,
@@ -126,7 +297,7 @@ def main():
         endd = datetime.datetime.now()
         delta = endd - startd
         module.exit_json(
-            cmd="remove_alias",
+            cmd="remove_rule",
             stdout=out.rstrip("\r\n"),
             stderr=err.rstrip("\r\n"),
             rc=rc,
